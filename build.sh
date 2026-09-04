@@ -1,0 +1,130 @@
+#!/bin/bash
+
+set -euo pipefail
+
+# ================================
+# Variables
+
+PUSH=false
+
+IMAGE_WGCF_VERSION="${IMAGE_WGCF_VERSION:-}"
+IMAGE_WGCF_COMMIT="${IMAGE_WGCF_COMMIT:-}"
+IMAGE_BUILD_REVISION="${IMAGE_BUILD_REVISION:-}"
+
+IMAGE_NAME="${IMAGE_NAME:-}"
+IMAGE_REGISTRY="${IMAGE_REGISTRY:-}"
+IMAGE_BUILD_TARGET_GOARCHS="${IMAGE_BUILD_TARGET_GOARCHS:-amd64}"
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+	--push)
+		PUSH=true
+		shift
+		;;
+	--image-name)
+		IMAGE_NAME="$2"
+		shift 2
+		;;
+	--image-registry)
+		IMAGE_REGISTRY="$2"
+		shift 2
+		;;
+	--image-build-target-goarchs)
+		IMAGE_BUILD_TARGET_GOARCHS="$2"
+		shift 2
+		;;
+	--image-wgcf-version)
+		IMAGE_WGCF_VERSION="$2"
+		shift 2
+		;;
+	--image-wgcf-commit)
+		IMAGE_WGCF_COMMIT="$2"
+		shift 2
+		;;
+	--image-build-revision)
+		IMAGE_BUILD_REVISION="$2"
+		shift 2
+		;;
+	*)
+		echo "Unknown option: '$1'"
+		exit 1
+		;;
+	esac
+done
+
+if [ -z "$IMAGE_NAME" ] || [ -z "$IMAGE_REGISTRY" ] || [ -z "$IMAGE_BUILD_TARGET_GOARCHS" ] || [ -z "$IMAGE_WGCF_VERSION" ] || [ -z "$IMAGE_BUILD_REVISION" ]; then
+	echo "Missing required variables!"
+	exit 1
+fi
+
+IMAGE_REPO="${IMAGE_REGISTRY}/${IMAGE_NAME}"
+
+IMAGE_WGCF_VERSION_MAJOR=$(echo "${IMAGE_WGCF_VERSION%%-*}" | awk -F. '{print $1}')
+IMAGE_WGCF_VERSION_MINOR=$(echo "${IMAGE_WGCF_VERSION%%-*}" | awk -F. '{print $2}')
+IMAGE_WGCF_VERSION_PATCH=$(echo "${IMAGE_WGCF_VERSION%%-*}" | awk -F. '{print $3}')
+
+IMAGE_WGCF_VERSION_MAJOR=${IMAGE_WGCF_VERSION_MAJOR:-0}
+IMAGE_WGCF_VERSION_MINOR=${IMAGE_WGCF_VERSION_MINOR:-0}
+IMAGE_WGCF_VERSION_PATCH=${IMAGE_WGCF_VERSION_PATCH:-0}
+
+IMAGE_TAG_FULL_QUALIFIED="${IMAGE_REPO}:${IMAGE_WGCF_VERSION}-r${IMAGE_BUILD_REVISION}"
+IMAGE_TAG_MAJOR_MINOR_PATCH="${IMAGE_REPO}:${IMAGE_WGCF_VERSION_MAJOR}.${IMAGE_WGCF_VERSION_MINOR}.${IMAGE_WGCF_VERSION_PATCH}"
+IMAGE_TAG_MAJOR_MINOR="${IMAGE_REPO}:${IMAGE_WGCF_VERSION_MAJOR}.${IMAGE_WGCF_VERSION_MINOR}"
+IMAGE_TAG_MAJOR="${IMAGE_REPO}:${IMAGE_WGCF_VERSION_MAJOR}"
+IMAGE_TAG_LATEST="${IMAGE_REPO}:latest"
+
+# ================================
+# VCS Information
+
+git config --global --add safe.directory "*" 2>/dev/null || true
+
+IMAGE_VCS_DATE_EPOCH=$(git log -1 --pretty=%ct)
+IMAGE_VCS_DATE=$(date -u -d @$IMAGE_VCS_DATE_EPOCH +'%Y-%m-%dT%H:%M:%S+00:00')
+IMAGE_VCS_REV=$(git rev-parse HEAD)
+
+# ================================
+# Build
+
+LOCAL_MANIFEST="localhost/${IMAGE_NAME}:build"
+
+buildah manifest rm "${LOCAL_MANIFEST}" 2>/dev/null || true
+buildah manifest create "${LOCAL_MANIFEST}"
+
+IFS=',' read -ra IMAGE_BUILD_TARGET_GOARCHS <<<"$IMAGE_BUILD_TARGET_GOARCHS"
+for arch in "${IMAGE_BUILD_TARGET_GOARCHS[@]}"; do
+	tag="localhost/${IMAGE_NAME}:build-${arch}"
+
+	buildah build \
+		--no-cache \
+		--jobs=4 \
+		--timestamp=${IMAGE_VCS_DATE_EPOCH} \
+		--build-arg IMAGE_VCS_DATE=$IMAGE_VCS_DATE \
+		--build-arg IMAGE_VCS_REV=$IMAGE_VCS_REV \
+		--build-arg IMAGE_WGCF_VERSION=$IMAGE_WGCF_VERSION \
+		--build-arg IMAGE_WGCF_COMMIT=$IMAGE_WGCF_COMMIT \
+		--build-arg IMAGE_BUILD_REVISION=$IMAGE_BUILD_REVISION \
+		--build-arg IMAGE_BUILD_TARGET_GOARCH=$arch \
+		-t "$tag" \
+		-f Dockerfile .
+
+	buildah manifest add --os linux --arch "$arch" "${LOCAL_MANIFEST}" "$tag"
+done
+
+# ================================
+# Push
+
+if [ "$PUSH" = true ]; then
+	echo "$IMAGE_REGISTRY_PASSWORD" | buildah login "$IMAGE_REGISTRY" -u "$IMAGE_REGISTRY_USERNAME" --password-stdin
+
+	for TAG in \
+		"${IMAGE_TAG_FULL_QUALIFIED}" \
+		"${IMAGE_TAG_MAJOR_MINOR_PATCH}" \
+		"${IMAGE_TAG_MAJOR_MINOR}" \
+		"${IMAGE_TAG_MAJOR}" \
+		"${IMAGE_TAG_LATEST}"; do
+		echo "Pushing images, tagging: ${TAG}..."
+		buildah manifest push --all "${LOCAL_MANIFEST}" "docker://${TAG}"
+	done
+else
+	echo "Skipping images push..."
+fi

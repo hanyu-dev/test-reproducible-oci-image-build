@@ -1,0 +1,54 @@
+name: build-image
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_REGISTRY: ghcr.io
+  IMAGE_REGISTRY_USERNAME: ${{ github.actor }}
+  IMAGE_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+  IMAGE_BUILD_TARGET_GOARCHS: amd64,arm64,loong64
+  # See https://github.com/ViRb3/wgcf/releases
+  IMAGE_WGCF_VERSION: 2.2.32
+  IMAGE_WGCF_COMMIT: 7947653aaa4b7a793a28603548c5f86449efc615
+  IMAGE_BUILD_REVISION: 0
+  # See https://quay.io/repository/buildah/stable?tab=tags
+  IMAGE_BUILDAH_VERSION: 1.43.2-immutable
+  IMAGE_BUILDAH_DIGEST: 19ee6da290f77e63ab7f108a1b22e63d4c36cb827fba9f494982c5ceeba27019
+
+jobs:
+  build:
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        # https://github.com/actions/checkout/releases/tag/v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Build
+        run: |
+          podman run \
+            --rm \
+            --device /dev/fuse \
+            --security-opt label=disable \
+            -v "$PWD:/workspace" \
+            -w /workspace \
+            -e IMAGE_NAME="${IMAGE_NAME}" \
+            -e IMAGE_REGISTRY="${IMAGE_REGISTRY}" \
+            -e IMAGE_REGISTRY_USERNAME="${IMAGE_REGISTRY_USERNAME}" \
+            -e IMAGE_REGISTRY_PASSWORD="${IMAGE_REGISTRY_PASSWORD}" \
+            -e IMAGE_BUILD_TARGET_GOARCHS="${IMAGE_BUILD_TARGET_GOARCHS}" \
+            -e IMAGE_WGCF_VERSION="${IMAGE_WGCF_VERSION}" \
+            -e IMAGE_WGCF_COMMIT="${IMAGE_WGCF_COMMIT}" \
+            -e IMAGE_BUILD_REVISION="${IMAGE_BUILD_REVISION}" \
+            --user=root \
+            quay.io/buildah/stable:v${IMAGE_BUILDAH_VERSION}@sha256:${IMAGE_BUILDAH_DIGEST} \
+            ./build.sh --push
