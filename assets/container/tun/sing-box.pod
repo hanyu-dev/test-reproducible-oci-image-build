@@ -1,0 +1,3 @@
+[Pod]
+PodName=sing-box
+Network=pasta:--mtu,65520

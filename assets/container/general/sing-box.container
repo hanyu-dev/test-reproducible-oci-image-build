@@ -1,0 +1,21 @@
+[Unit]
+Description='sing-box' service container
+RequiresMountsFor=%t/containers
+
+[Container]
+ContainerName=sing-box
+Image=ghcr.io/hanyu-dev/oci-image-sing-box:1.14
+AutoUpdate=registry
+NoNewPrivileges=true
+DropCapability=ALL
+AddCapability=CAP_NET_ADMIN
+AddCapability=CAP_NET_BIND_SERVICE
+Volume=%h/.local/share/sing-box:/data
+Exec=-C /data run
+
+[Service]
+Restart=always
+TimeoutStartSec=900
+
+[Install]
+WantedBy=default.target
